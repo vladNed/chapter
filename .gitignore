@@ -1,0 +1,11 @@
+/target
+Cargo.lock
+
+# VS Code
+.vscode
+
+# Idea
+.idea
+
+# Python
+*.py
