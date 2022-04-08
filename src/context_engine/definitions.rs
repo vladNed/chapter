@@ -3,8 +3,8 @@ pub type CodeLocation = (usize, usize);
 /// NamespaceType refers to a code block context type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ContextType {
-    /// Represents a default no namespace value
-    NONE,
+    /// Default namespace
+    ROOT,
 
     /// Represents a python namespace context
     METHOD,
@@ -14,85 +14,94 @@ pub enum ContextType {
 
     /// Represents a __all__ namespace context
     ALL,
+
+    /// Represents a docstring context
+    DOCSTRING,
 }
 
-
-/// String like object but also contains additional attributes related to
-/// code location and state
-#[derive(Debug, Clone)]
-pub struct Docstring {
-
-    /// Value in string of the docstring lines concatenated
-    pub value: String,
-
-    /// Start line of the docstring
-    pub start: usize,
-
-    /// End line of the docstring
-    pub end: usize,
+#[derive(Clone)]
+pub enum ContextNode {
+    Root,
+    Parent {
+        name: String,
+        context_type: ContextType,
+        start: usize,
+        end: usize,
+        is_public: bool,
+        value: String,
+        children: Vec<ContextNode>,
+    },
+    Child {
+        name: String,
+        context_type: ContextType,
+        start: usize,
+        end: usize,
+        is_public: bool,
+        value: String,
+        parent: Box<ContextNode>,
+        children: Vec<ContextNode>,
+    },
 }
 
-impl Docstring {
-    pub fn new(value: String, start: usize, end: usize) -> Self {
-        Self {
-            value,
-            start,
-            end
+impl ContextNode {
+    pub fn value(&self) -> Option<&String> {
+        match self {
+            Self::Child { value, .. } => {
+                Some(value)
+            },
+            Self::Parent { value, .. } => {
+                Some(value)
+            },
+            _ => None,
+        }
+    }
+    pub fn add_node(&mut self, node: &ContextNode) {
+        match self {
+            Self::Child { children, .. } => {
+                children.push(node.to_owned());
+            }
+            Self::Parent { children, .. } => {
+                children.push(node.to_owned());
+            }
+            _ => (),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.value.is_empty()
+    pub fn update(&mut self, update_end: usize, update_value: String) {
+        match self {
+            Self::Child { end, value, .. } => {
+                *end = update_end;
+                *value = update_value;
+            }
+            Self::Parent { end, value, .. } => {
+                *end = update_end;
+                *value = update_value;
+            }
+            _ => (),
+        }
     }
-}
-/// Represents a python structure such as:
-/// - class
-/// - method
-///
-/// To satisfy the cases where classes have method or nested classes
-/// or methods have inner methods defined, this concept of a definition
-/// holding multiple states resembles a tree.
-pub enum Definition {
 
-    /// Top level definition. Usually found in the root of the py module
-    Origin {
-        context_type: ContextType,
-        name: String,
-        location: CodeLocation,
-        docstring: Docstring,
-        is_public: bool,
-        children: Box<Vec<Definition>>
-    },
+    pub fn children_len(&self) -> usize {
+        match self {
+            Self::Child { children, .. } => {
+                children.len()
+            }
+            Self::Parent { children, .. } => {
+                children.len()
+            }
+            _ => 0,
+        }
+    }
 
-    /// Nested definition. Usually defined inside a class/method
-    Nested {
-        context_type: ContextType,
-        name: String,
-        location: CodeLocation,
-        docstring: Docstring,
-        is_public: bool,
-        parent: Box<Vec<Definition>>,
-        children: Box<Vec<Definition>>,
-    },
-}
-
-/// Represents the `__all__` in python module defining which definitions
-/// (classes/methods) are public.
-pub struct AllDefinition {
-    pub objects: Vec<Definition>
-}
-
-pub struct PyModule {
-
-    /// Full path to the `.py` file
-    pub filename: String,
-
-    /// Docstring
-    pub docstring: Docstring,
-
-    /// Definitions
-    pub defs: Vec<Definition>,
-
-    /// `__all__` representation
-    pub all: Option<AllDefinition>
+    pub fn append_value(&mut self, new_value: &String) -> () {
+        match self {
+            Self::Child { value, .. } => {
+                value.push_str(new_value)
+            }
+            Self::Parent { value, .. } => {
+                value.push_str(new_value)
+            }
+            _ => (),
+        }
+    }
 }
