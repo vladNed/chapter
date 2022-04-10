@@ -1,16 +1,24 @@
 use regex::Regex;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use super::definitions;
-use super::{ALL_MATCH, CLASS_MATCH, DEF_MATCH, DOCSTRING_START};
+use super::{
+    ALL_MATCH,
+    CLASS_MATCH,
+    DEF_MATCH,
+    DOCSTRING_START,
+    DOCSTRING_END
+};
 
 pub struct ContextProcessor {
-    context_type: definitions::ContextType,
-    current_context: definitions::ContextNode,
-    line_counter: usize,
-    max_height: usize,
-    file_lines: Vec<String>,
-    patterns: HashMap<definitions::ContextType, Regex>,
+    pub(super)context_type: definitions::ContextType,
+    pub(super)current_context: Rc<RefCell<definitions::ContextNode>>,
+    pub line_counter: usize,
+    pub(super)max_height: usize,
+    pub file_lines: Vec<String>,
+    pub(super)patterns: HashMap<definitions::ContextType, Regex>,
 }
 
 impl ContextProcessor {
@@ -35,7 +43,7 @@ impl ContextProcessor {
 
         Self {
             context_type: definitions::ContextType::ROOT,
-            current_context: definitions::ContextNode::Root,
+            current_context: definitions::ContextNode::root(),
             line_counter: 0,
             max_height: file_lines.len(),
             file_lines,
@@ -43,15 +51,14 @@ impl ContextProcessor {
         }
     }
 
-
     /// Checks for context entry point.
     ///
     /// If a line matches a python definition such as a class/method/all it
     /// returns the specific context.
-    fn check_context_entry(&mut self, current_line: &String) -> Option<definitions::ContextType> {
+    pub(super) fn check_context_entry(&self, current_line: &String) -> Option<definitions::ContextType> {
         for (context_type, pattern) in &self.patterns {
             if pattern.is_match(current_line) {
-                return Some(context_type.clone())
+                return Some(context_type.to_owned())
             }
         }
 
@@ -60,86 +67,45 @@ impl ContextProcessor {
 
     /// Changes the state of the processor so that it reflects being inside a
     /// context.
-    fn start_context(&mut self, context_type: definitions::ContextType, current_line: &String) {
-        match self.current_context {
-            definitions::ContextNode::Root => {
-                let context_name = self.get_context_name(current_line);
-                let is_public = context_name.starts_with("_");
-                let root_parent = definitions::ContextNode::Parent {
-                    name: context_name,
-                    context_type: context_type.to_owned(),
-                    start: self.line_counter,
-                    end: 0,
-                    is_public,
-                    value: String::new(),
-                    children: Vec::new(),
-                };
-                self.current_context = root_parent;
-                self.context_type = context_type;
+    pub(super) fn start_context(&mut self, context_type: definitions::ContextType, current_line: &String) {
+        self.context_type = context_type;
+        let context_name = self.get_context_name(current_line);
+        let is_public = !context_name.starts_with("_");
+
+        let new_context = match self.current_context.borrow().context_type {
+            definitions::ContextType::ROOT => {
+                definitions::ContextNode::new(
+                    context_name,
+                    self.context_type.clone(),
+                    self.line_counter,
+                    is_public
+                )
             }
             _ => {
-                let context_name = self.get_context_name(current_line);
-                let is_public = context_name.starts_with("_");
-                let new_child = definitions::ContextNode::Child {
-                    name: context_name,
-                    context_type: context_type.to_owned(),
-                    start: self.line_counter,
-                    end: 0,
-                    is_public,
-                    value: String::new(),
-                    parent: Box::new(self.current_context.clone()),
-                    children: Vec::new(),
-                };
-                self.current_context.add_node(&new_child);
-                self.current_context = new_child;
-                self.context_type = context_type;
-            }
-        }
-    }
+                let child_node = definitions::ContextNode::new(
+                    context_name,
+                    self.context_type.clone(),
+                    self.line_counter,
+                    is_public
+                );
 
-    /// Check if the current line represents an exit point from the
-    /// current context.
-    fn check_context_exit(&self, current_line: &String) -> bool {
-        if self.context_type != definitions::ContextType::ROOT && current_line.is_empty(){
-            if self.file_lines[self.line_counter + 1].is_empty() {
-                return true
+                child_node.borrow_mut().set_parent(Rc::clone(&self.current_context));
+                child_node
             }
-        }
-        false
-    }
+        };
 
-    /// Changes the state of the processor so that it reflects being outside
-    /// current context.
-    fn exit_context(&mut self) -> () {
-        match self.current_context.to_owned() {
-            definitions::ContextNode::Child {parent, ..} => {
-                self.current_context.update(self.line_counter, String::new());
-                self.current_context = *parent.clone();
-                // TODO: Should flush somewhere to memory or smth
-            }
-            _ => {
-                self.current_context.update(self.line_counter, String::new());
-                self.current_context = definitions::ContextNode::Root;
-                // TODO: Should flush somewhere to memory or smth
-            }
-        }
-    }
-
-
-    /// Extracting lines that are used inside unique context types
-    ///
-    /// For example, docstring context would need the string values.
-    /// Each new context can be safely added as a match arm to this method.
-    fn extract_context_data(&mut self, current_line: &String) {
-        match self.context_type.to_owned() {
-            definitions::ContextType::DOCSTRING => {
-                self.current_context.append_value(current_line)
+        match new_context.borrow().parent {
+            Some(_) => {
+                self.current_context.borrow_mut().add_node(Rc::clone(&new_context));
             },
-            _ => ()
+            None => ()
         }
+
+        self.current_context = new_context;
     }
 
-    fn get_context_name(&self, current_line: &String) -> String {
+    /// Extracts context name based on context type
+    pub(super) fn get_context_name(&self, current_line: &String) -> String {
         match self.context_type {
             definitions::ContextType::METHOD => {
                 let c = self
@@ -151,10 +117,8 @@ impl ContextProcessor {
                 c.get(0).unwrap().as_str().to_string()
             }
             definitions::ContextType::CLASS => {
-                let c = self
-                    .patterns
-                    .get(&definitions::ContextType::CLASS)
-                    .unwrap()
+                let pattern = self.patterns.get(&definitions::ContextType::CLASS).unwrap();
+                let c = pattern
                     .captures(current_line)
                     .unwrap();
                 c.get(0).unwrap().as_str().to_string()
@@ -163,23 +127,98 @@ impl ContextProcessor {
         }
     }
 
+    /// Check if the current line represents an exit point from the
+    /// current context.
+    pub(super) fn check_context_exit(&self, current_line: &String) -> bool {
+        match self.context_type {
+            definitions::ContextType::ROOT => false,
+            definitions::ContextType::DOCSTRING => {
+                let r = Regex::new(DOCSTRING_END).unwrap();
+                r.is_match(current_line)
+            },
+            definitions::ContextType::CLASS => {
+                if current_line.is_empty() {
+                    if self.line_counter + 1 > self.max_height {
+                        return true
+                    }
+                    let second_line = self.file_lines[self.line_counter + 1].to_owned();
+                    if second_line.is_empty() || !second_line.starts_with("    "){
+                        return true
+                    }
+                }
+                false
+            },
+            _ => {
+                if current_line.is_empty() {
+                    if self.line_counter + 1 > self.max_height {
+                        return true
+                    }
+                    let second_line = self.file_lines[self.line_counter + 1].to_owned();
+                    if let Some(_) = self.check_context_entry(&second_line){
+                        return true
+                    } else if second_line.is_empty() {
+                        return true
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /// Changes the state of the processor so that it reflects being outside
+    /// current context.
+    fn exit_context(&mut self) -> () {
+        match self.current_context.to_owned().borrow().parent.to_owned() {
+            Some(p) => {
+                self.current_context = Rc::clone(&p);
+                self.context_type = p.borrow().context_type.to_owned();
+            },
+            None => {
+                self.current_context = definitions::ContextNode::root();
+                self.context_type = definitions::ContextType::ROOT
+            }
+        }
+    }
+    /// Extracting lines that are used inside unique context types
+    ///
+    /// For example, docstring context would need the string values.
+    /// Each new context can be safely added as a match arm to this method.
+    fn extract_context_data(&mut self, current_line: &String) {
+        match self.context_type.to_owned() {
+            definitions::ContextType::DOCSTRING => {
+                self.current_context.borrow_mut().append_value(current_line)
+            },
+            _ => ()
+        }
+    }
+
+    // TODO: More tests for this
     pub fn parse_module(&mut self) {
         loop {
             let current_line = self.file_lines[self.line_counter].to_owned();
 
-            if self.check_context_exit(&current_line) {
-                self.exit_context();
-            }
             if let Some(c) = self.check_context_entry(&current_line) {
                 self.start_context(c, &current_line);
+                println!("ENTERING CONTEXT -> {:?}", self.context_type);
+            }
+            self.extract_context_data(&current_line);
+            if self.check_context_exit(&current_line) {
+                println!("Exiting CONTEXT -> {:?}", self.context_type);
+                self.exit_context();
             }
 
-            self.extract_context_data(&current_line);
-
             self.line_counter += 1;
-            if self.line_counter >= self.max_height {
+            if self.line_counter >= self.max_height -1 {
+                // TODO: Clear and make pymodule were to flush all the classes, methods, all...everything
                 break
             }
         }
     }
 }
+
+
+
+
+
+
+
