@@ -1,5 +1,6 @@
 pub mod definitions;
 mod processor;
+pub mod controller;
 
 pub use processor::ContextProcessor;
 
@@ -91,11 +92,11 @@ mod tests {
         blank_processor.start_context(definitions::ContextType::CLASS, &class_context);
 
         assert_eq!(
-            blank_processor.context_type,
+            blank_processor.context_state.context_type,
             definitions::ContextType::CLASS
         );
         assert_eq!(
-            blank_processor.current_context.borrow().name,
+            blank_processor.context_state.context_node.borrow().name,
             "class TestClass"
         );
     }
@@ -105,12 +106,12 @@ mod tests {
         let mut blank_processor = ContextProcessor::load(Vec::new());
         let mut class_context = "class TestClass(TestInterface):  ".to_string();
 
-        blank_processor.context_type = definitions::ContextType::CLASS;
+        blank_processor.context_state.context_type = definitions::ContextType::CLASS;
         let result = blank_processor.get_context_name(&class_context);
         assert_eq!(result, "class TestClass".to_string());
 
         class_context = "   async def test_method(self, args, kwargs) -> None:".to_string();
-        blank_processor.context_type = definitions::ContextType::METHOD;
+        blank_processor.context_state.context_type = definitions::ContextType::METHOD;
         let result = blank_processor.get_context_name(&class_context);
         assert_eq!(result, "def test_method".to_string());
     }
@@ -123,7 +124,7 @@ mod tests {
         let result = blank_processor.check_context_exit(&current_line);
         assert_eq!(result, false);
 
-        blank_processor.context_type = definitions::ContextType::DOCSTRING;
+        blank_processor.context_state.context_type = definitions::ContextType::DOCSTRING;
         let result = blank_processor.check_context_exit(&current_line);
         assert_eq!(result, true);
 
@@ -156,14 +157,14 @@ class TestClass:
         let mut blank_processor = ContextProcessor::load(text_code.clone());
         let current_line = text_code[5].clone();
         blank_processor.line_counter = 5;
-        blank_processor.context_type = definitions::ContextType::CLASS;
+        blank_processor.context_state.context_type = definitions::ContextType::CLASS;
 
         let result = blank_processor.check_context_exit(&current_line);
         assert_eq!(result, true);
 
         let current_line = text_code[4].clone();
         blank_processor.line_counter = 4;
-        blank_processor.context_type = definitions::ContextType::CLASS;
+        blank_processor.context_state.context_type = definitions::ContextType::CLASS;
 
         let result = blank_processor.check_context_exit(&current_line);
         assert_eq!(result, false);
@@ -185,7 +186,7 @@ class TestClass:
         let mut blank_processor = ContextProcessor::load(text_code.clone());
         let current_line = text_code[3].clone();
         blank_processor.line_counter = 3;
-        blank_processor.context_type = definitions::ContextType::METHOD;
+        blank_processor.context_state.context_type = definitions::ContextType::METHOD;
 
         let result = blank_processor.check_context_exit(&current_line);
         assert_eq!(result, true);

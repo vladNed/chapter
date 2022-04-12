@@ -1,14 +1,13 @@
 use regex::Regex;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use super::controller::ContextState;
 use super::definitions;
 use super::{ALL_MATCH, CLASS_MATCH, DEF_MATCH, DOCSTRING_END, DOCSTRING_START};
 
 pub struct ContextProcessor {
-    pub(super) context_type: definitions::ContextType,
-    pub(super) current_context: Rc<RefCell<definitions::ContextNode>>,
+    pub context_state: ContextState,
     pub line_counter: usize,
     pub(super) max_height: usize,
     pub file_lines: Vec<String>,
@@ -36,8 +35,7 @@ impl ContextProcessor {
         );
 
         Self {
-            context_type: definitions::ContextType::ROOT,
-            current_context: definitions::ContextNode::root(),
+            context_state: ContextState::new(),
             line_counter: 0,
             max_height: file_lines.len(),
             file_lines,
@@ -55,12 +53,11 @@ impl ContextProcessor {
     ) -> Option<definitions::ContextType> {
         for (context_type, pattern) in &self.patterns {
             if pattern.is_match(current_line) {
-
                 // TODO: Big ugly fix for docstrings. Needs to change ASAP
-                if *context_type == definitions::ContextType::DOCSTRING &&
-                    self.context_type == definitions::ContextType::DOCSTRING
+                if self.context_state.context_type == definitions::ContextType::DOCSTRING
+                    && *context_type == definitions::ContextType::DOCSTRING
                 {
-                    continue
+                    continue;
                 }
                 return Some(context_type.to_owned());
             }
@@ -76,46 +73,38 @@ impl ContextProcessor {
         context_type: definitions::ContextType,
         current_line: &String,
     ) {
-        self.context_type = context_type;
-        let context_name = self.get_context_name(current_line);
-        let is_public = !context_name.starts_with("_");
-
-        let new_context = match self.current_context.borrow().context_type {
-            definitions::ContextType::ROOT => definitions::ContextNode::new(
-                context_name,
-                self.context_type.clone(),
-                self.line_counter,
-                is_public,
-            ),
-            _ => {
-                let child_node = definitions::ContextNode::new(
+        match self.context_state.context_type {
+            definitions::ContextType::ROOT => {
+                self.context_state.context_type = context_type.clone();
+                let context_name = self.get_context_name(current_line);
+                let is_public = !context_name.starts_with("_");
+                let parent_node = definitions::ContextNode::new(
                     context_name,
-                    self.context_type.clone(),
+                    context_type.clone(),
                     self.line_counter,
                     is_public,
                 );
-
-                child_node
-                    .borrow_mut()
-                    .set_parent(Rc::clone(&self.current_context));
-                child_node
+                self.context_state.context_node = parent_node;
+                self.context_state.context_type = context_type;
             }
-        };
-
-        match new_context.borrow().parent {
-            Some(_) => {
-                self.current_context
-                    .borrow_mut()
-                    .add_node(Rc::clone(&new_context));
+            _ => {
+                self.context_state.context_type = context_type.clone();
+                let context_name = self.get_context_name(current_line);
+                let is_public = !context_name.starts_with("_");
+                let child_node = definitions::ContextNode::new(
+                    context_name,
+                    context_type.clone(),
+                    self.line_counter,
+                    is_public,
+                );
+                self.context_state.descend(child_node);
             }
-            None => (),
         }
-        self.current_context = new_context;
     }
 
     /// Extracts context name based on context type
     pub(super) fn get_context_name(&self, current_line: &String) -> String {
-        match self.context_type {
+        match self.context_state.context_type {
             definitions::ContextType::METHOD => {
                 let c = self
                     .patterns
@@ -139,7 +128,7 @@ impl ContextProcessor {
     pub(super) fn check_context_exit(&self, current_line: &String) -> bool {
         let line_is_empty = |line: &String| line.is_empty() || !line.starts_with("    ");
 
-        match self.context_type {
+        match self.context_state.context_type {
             definitions::ContextType::ROOT => false,
             definitions::ContextType::DOCSTRING => {
                 let r = Regex::new(DOCSTRING_END).unwrap();
@@ -176,16 +165,7 @@ impl ContextProcessor {
     /// Changes the state of the processor so that it reflects being outside
     /// current context.
     fn exit_context(&mut self) -> () {
-        let parent = match self.current_context.borrow().parent.to_owned() {
-            Some(p) => p,
-            None => definitions::ContextNode::root()
-        };
-        {
-            println!("Now the context is -> {:?}", &parent.borrow().context_type);
-        }
-        self.current_context.borrow_mut().set_location(self.line_counter);
-        self.current_context = Rc::clone(&parent);
-        self.context_type = parent.borrow().context_type.to_owned();
+        self.context_state.ascend()
     }
 
     /// Extracting lines that are used inside unique context types
@@ -193,9 +173,12 @@ impl ContextProcessor {
     /// For example, docstring context would need the string values.
     /// Each new context can be safely added as a match arm to this method.
     fn extract_context_data(&mut self, current_line: &String) {
-        match self.context_type.to_owned() {
+        match self.context_state.context_type {
             definitions::ContextType::DOCSTRING => {
-                self.current_context.borrow_mut().append_value(current_line)
+                self.context_state
+                    .context_node
+                    .borrow_mut()
+                    .append_value(current_line);
             }
             _ => (),
         }
@@ -203,14 +186,13 @@ impl ContextProcessor {
 
     // TODO: More tests for this
     pub fn parse_module(&mut self) {
-        let mut lines = self.file_lines
+        let mut lines = self
+            .file_lines
             .to_owned()
             .into_iter()
             .take(self.max_height - 1);
 
-
         loop {
-
             // Fetch current line
             let current_line = match lines.next() {
                 Some(line) => line,

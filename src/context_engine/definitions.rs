@@ -35,7 +35,7 @@ pub struct ContextNode {
 
 impl ContextNode {
     pub fn add_node(&mut self, child_node: Rc<RefCell<ContextNode>>) {
-        self.children.push(Rc::clone(&child_node));
+        self.children.push(child_node);
     }
 
     pub fn append_value(&mut self, new_value: &String) {
@@ -85,6 +85,6 @@ impl ContextNode {
     }
 
     pub fn set_parent(&mut self, parent_node: Rc<RefCell<ContextNode>>) {
-        self.parent = Some(Rc::clone(&parent_node));
+        self.parent = Some(parent_node);
     }
 }
