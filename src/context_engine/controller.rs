@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use super::definitions;
 use super::definitions::ContextNode;
 use super::definitions::ContextType;
 
@@ -49,5 +50,11 @@ impl ContextState {
 
         self.context_node = parent;
         self.context_type = self.context_node.borrow().context_type.to_owned();
+    }
+
+    pub fn top(&mut self) {
+        while self.context_type != definitions::ContextType::ROOT {
+            self.ascend();
+        }
     }
 }

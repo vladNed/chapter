@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use regex::Regex;
 use std::collections::HashMap;
 use std::rc::Rc;
+use crate::context_engine::definitions::ContextNode;
 
 use super::controller::ContextState;
 use super::definitions;
@@ -73,33 +75,16 @@ impl ContextProcessor {
         context_type: definitions::ContextType,
         current_line: &String,
     ) {
-        match self.context_state.context_type {
-            definitions::ContextType::ROOT => {
-                self.context_state.context_type = context_type.clone();
-                let context_name = self.get_context_name(current_line);
-                let is_public = !context_name.starts_with("_");
-                let parent_node = definitions::ContextNode::new(
-                    context_name,
-                    context_type.clone(),
-                    self.line_counter,
-                    is_public,
-                );
-                self.context_state.context_node = parent_node;
-                self.context_state.context_type = context_type;
-            }
-            _ => {
-                self.context_state.context_type = context_type.clone();
-                let context_name = self.get_context_name(current_line);
-                let is_public = !context_name.starts_with("_");
-                let child_node = definitions::ContextNode::new(
-                    context_name,
-                    context_type.clone(),
-                    self.line_counter,
-                    is_public,
-                );
-                self.context_state.descend(child_node);
-            }
-        }
+        self.context_state.context_type = context_type.clone();
+        let context_name = self.get_context_name(current_line);
+        let is_public = !context_name.starts_with("_");
+        let child_node = definitions::ContextNode::new(
+            context_name,
+            context_type.clone(),
+            self.line_counter,
+            is_public,
+        );
+        self.context_state.descend(child_node);
     }
 
     /// Extracts context name based on context type
@@ -128,6 +113,7 @@ impl ContextProcessor {
     pub(super) fn check_context_exit(&self, current_line: &String) -> bool {
         let line_is_empty = |line: &String| line.is_empty() || !line.starts_with("    ");
 
+        //TODO: BIG BUG HERE WHEN COMING FROM METHOD CONTEXT IN CLASS TO NEW CLASS
         match self.context_state.context_type {
             definitions::ContextType::ROOT => false,
             definitions::ContextType::DOCSTRING => {
@@ -165,7 +151,11 @@ impl ContextProcessor {
     /// Changes the state of the processor so that it reflects being outside
     /// current context.
     fn exit_context(&mut self) -> () {
-        self.context_state.ascend()
+        self.context_state.ascend();
+        self.context_state
+            .context_node
+            .borrow_mut()
+            .set_location(self.line_counter);
     }
 
     /// Extracting lines that are used inside unique context types
@@ -184,8 +174,7 @@ impl ContextProcessor {
         }
     }
 
-    // TODO: More tests for this
-    pub fn parse_module(&mut self) {
+    pub fn parse_module(&mut self) -> Rc<RefCell<ContextNode>>{
         let mut lines = self
             .file_lines
             .to_owned()
@@ -197,8 +186,8 @@ impl ContextProcessor {
             let current_line = match lines.next() {
                 Some(line) => line,
                 None => {
-                    // TODO: Flush objects...constantly
-                    break;
+                    self.context_state.top();
+                    return Rc::clone(&self.context_state.context_node)
                 }
             };
 

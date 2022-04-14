@@ -67,7 +67,7 @@ impl ContextNode {
 
     pub fn root() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(ContextNode {
-            name: String::new(),
+            name: String::from("__root__"),
             context_type: ContextType::ROOT,
             start: usize::MIN,
             end: usize::MIN,

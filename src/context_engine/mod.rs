@@ -203,6 +203,16 @@ class TestClass:
 
     def hello():
         pass
+
+
+class NewClass:
+
+    def __init__():
+        pass
+
+
+def outscope_method():
+    pass
 "
         .split("\n")
         .map(|s| s.to_string())
