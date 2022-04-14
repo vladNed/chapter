@@ -1,6 +1,7 @@
 pub mod definitions;
 mod processor;
-pub mod controller;
+pub(super) mod state;
+pub mod rules;
 
 pub use processor::ContextProcessor;
 
@@ -14,7 +15,7 @@ const DOCSTRING_END: &str = r#"('{3}|"{3})$"#;
 mod tests {
     use std::rc::Rc;
 
-    use super::*;
+    use super::{*, definitions::Indent};
 
     #[test]
     fn test_context_node_set_parent() {
@@ -173,11 +174,11 @@ class TestClass:
     #[test]
     fn test_check_context_exit_method() {
         let text_code = "
-    def __init__():
-        pass
+def __init__():
+    pass
 
-    def hello() -> str:
-        return hello world
+def hello() -> str:
+    return hello world
 
 "
         .split("\n")
@@ -197,12 +198,14 @@ class TestClass:
         let text_code = "
 class TestClass:
 
-    def __init__():
-        \"\"\"One liner\"\"\"
+    def __init__(self):
+        \"\"\" Niste docstring
+        multiline
+        \"\"\"
         pass
 
-    def hello():
-        pass
+        def inner_method():
+            pass
 
 
 class NewClass:
@@ -210,9 +213,9 @@ class NewClass:
     def __init__():
         pass
 
-
 def outscope_method():
     pass
+    
 "
         .split("\n")
         .map(|s| s.to_string())
@@ -220,6 +223,21 @@ def outscope_method():
 
         let mut processor = ContextProcessor::load(text_code);
 
-        processor.parse_module();
+        let module = processor.parse_module();
+
+        assert_eq!(module.borrow().children.len(), 3);
+    }
+
+    #[test]
+    fn test_indent_struct() {
+        let mut new_indent = Indent::new();
+        new_indent.increase();
+        assert_eq!(new_indent.value().len(), 4);
+
+        new_indent.increase();
+        assert_eq!(new_indent.value().len(), 8);
+
+        new_indent.decrease();
+        assert_eq!(new_indent.value().len(), 4);
     }
 }

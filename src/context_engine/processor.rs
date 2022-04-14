@@ -1,18 +1,22 @@
-use std::cell::RefCell;
+use crate::context_engine::definitions::ContextNode;
 use regex::Regex;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use crate::context_engine::definitions::ContextNode;
 
-use super::controller::ContextState;
 use super::definitions;
+use super::definitions::Indent;
+use super::rules::LogicContext;
+use super::state::ContextState;
 use super::{ALL_MATCH, CLASS_MATCH, DEF_MATCH, DOCSTRING_END, DOCSTRING_START};
 
 pub struct ContextProcessor {
     pub context_state: ContextState,
     pub line_counter: usize,
-    pub(super) max_height: usize,
     pub file_lines: Vec<String>,
+    pub(super) rules: LogicContext,
+    pub(super) max_height: usize,
+    pub(super) indent: Indent,
     pub(super) patterns: HashMap<definitions::ContextType, Regex>,
 }
 
@@ -42,6 +46,8 @@ impl ContextProcessor {
             max_height: file_lines.len(),
             file_lines,
             patterns,
+            indent: Indent::new(),
+            rules: LogicContext::new()
         }
     }
 
@@ -55,9 +61,8 @@ impl ContextProcessor {
     ) -> Option<definitions::ContextType> {
         for (context_type, pattern) in &self.patterns {
             if pattern.is_match(current_line) {
-                // TODO: Big ugly fix for docstrings. Needs to change ASAP
-                if self.context_state.context_type == definitions::ContextType::DOCSTRING
-                    && *context_type == definitions::ContextType::DOCSTRING
+                if self.rules.contains(&self.context_state.context_type)
+                    && self.rules.contains(context_type)
                 {
                     continue;
                 }
@@ -85,6 +90,9 @@ impl ContextProcessor {
             is_public,
         );
         self.context_state.descend(child_node);
+        if !self.rules.contains(&self.context_state.context_type) {
+            self.indent.increase();
+        }
     }
 
     /// Extracts context name based on context type
@@ -112,8 +120,8 @@ impl ContextProcessor {
     /// current context.
     pub(super) fn check_context_exit(&self, current_line: &String) -> bool {
         let line_is_empty = |line: &String| line.is_empty() || !line.starts_with("    ");
+        let get_second_line = |line_counter: usize| &self.file_lines[line_counter + 1];
 
-        //TODO: BIG BUG HERE WHEN COMING FROM METHOD CONTEXT IN CLASS TO NEW CLASS
         match self.context_state.context_type {
             definitions::ContextType::ROOT => false,
             definitions::ContextType::DOCSTRING => {
@@ -121,29 +129,21 @@ impl ContextProcessor {
                 r.is_match(current_line)
             }
             definitions::ContextType::CLASS => {
-                if current_line.is_empty() {
-                    if self.line_counter + 1 > self.max_height {
-                        return true;
-                    }
-                    if line_is_empty(&self.file_lines[self.line_counter + 1]) {
-                        return true;
-                    }
+                if !current_line.is_empty() {
+                    return false;
                 }
-                false
+                if self.line_counter + 1 > self.max_height { true }
+                else if line_is_empty(&get_second_line(self.line_counter)) { true }
+                else { false }
             }
             _ => {
-                if current_line.is_empty() {
-                    if self.line_counter + 1 > self.max_height {
-                        return true;
-                    }
-                    let second_line = self.file_lines[self.line_counter + 1].to_owned();
-                    if let Some(_) = self.check_context_entry(&second_line) {
-                        return true;
-                    } else if line_is_empty(&second_line) {
-                        return true;
-                    }
+                if !current_line.is_empty() {
+                    return false;
                 }
-                false
+                let second_line = get_second_line(self.line_counter);
+                if self.line_counter + 1 > self.max_height { true }
+                else if line_is_empty(&second_line) { true }
+                else { false }
             }
         }
     }
@@ -151,6 +151,7 @@ impl ContextProcessor {
     /// Changes the state of the processor so that it reflects being outside
     /// current context.
     fn exit_context(&mut self) -> () {
+        self.indent.decrease();
         self.context_state.ascend();
         self.context_state
             .context_node
@@ -174,7 +175,21 @@ impl ContextProcessor {
         }
     }
 
-    pub fn parse_module(&mut self) -> Rc<RefCell<ContextNode>>{
+    fn check_root_exit(&mut self) -> bool {
+        if self.line_counter + 1 >= self.max_height {
+            return false;
+        }
+        let second_line = &self.file_lines[self.line_counter + 1];
+        if !second_line.starts_with(self.indent.value()) {
+            while self.context_state.context_type != definitions::ContextType::ROOT {
+                self.exit_context();
+            }
+            return true;
+        }
+        false
+    }
+
+    pub fn parse_module(&mut self) -> Rc<RefCell<ContextNode>> {
         let mut lines = self
             .file_lines
             .to_owned()
@@ -187,25 +202,42 @@ impl ContextProcessor {
                 Some(line) => line,
                 None => {
                     self.context_state.top();
-                    return Rc::clone(&self.context_state.context_node)
+                    break;
                 }
             };
 
             // Check context entry
             if let Some(c) = self.check_context_entry(&current_line) {
                 self.start_context(c, &current_line);
+                println!(
+                    "{}START -> [{:?}]. line:{}",
+                    self.indent.value(),
+                    self.context_state.context_type,
+                    self.line_counter
+                )
             }
 
             // Process any kind of context for values
             self.extract_context_data(&current_line);
 
             // Check exit
+
             if self.check_context_exit(&current_line) {
-                self.exit_context();
+                println!(
+                    "{}EXIT -> [{:?}]. line:{}",
+                    self.indent.value(),
+                    self.context_state.context_type,
+                    self.line_counter
+                );
+                if !self.check_root_exit() {
+                    self.exit_context();
+                }
             }
 
             // Increment line counter
             self.line_counter += 1;
         }
+
+        Rc::clone(&self.context_state.context_node)
     }
 }
